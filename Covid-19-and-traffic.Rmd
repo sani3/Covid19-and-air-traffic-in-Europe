@@ -1,0 +1,339 @@
+---
+title: "Impact of Covid-19 on Air Traffic in Europe"
+author: "Stephen Sani"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+## Introduction
+Covid-19 is probably the most important single event in the year 2019. As the virus spread across the globe, governments around the world began to take measures to curb the transmission of the virus. One such measures was restrictions on air travels in addition, some imposed a total loackdown of part orentire country. The measures taken seem to immediately affected air travel and it is widely believed that covid-19 have affected most aspects of human lives.
+In this report, we will investigate the impact of covid-19 and associated restrictions on air traffic. The data source is from Eurocontrol. Eurocontrol minitors air traffic in airports across Europe.
+For example, we are interestes in 
+1. the trend of total traffic by year
+2. the trend of difference between arrival and departure 
+3. The effect on top ten airports with highest traffic in 2019 and 2020.
+
+### Load required R packages
+The analysis require some packages that must be loaded to R
+```{r}
+library(tidyverse)
+library(janitor)
+library(patchwork)
+library(readxl)
+library(vroom)
+library(scales)
+library(ggthemes)
+```
+
+### Download data file
+Next we download the data to the data directory from the url at https://www.eurocontrol.int/performance/data/download/xls/Airport_Traffic.xlsx
+The file was opened in Excel, metadata worksheets were removed and the file was saved to .csv(utf8) in the data directory.
+
+### Read the data from file
+Next we read the data from the file
+```{r message=FALSE, warning=FALSE}
+traffic <- vroom::vroom("data/flights2.csv")
+```
+
+## Data Exploration
+We preview first 6 observations
+```{r}
+head(traffic, 6)
+```
+Let us print the column names. 
+```{r}
+names(traffic)
+```
+The column names require cleaning.
+
+Let us get technical details of the data
+```{r}
+glimpse(traffic)
+```
+Some column data types could be adjusted
+The same information and more could be seen when we display the structure of the data
+```{r}
+str(traffic)
+```
+
+### Data cleaning
+Let us clean the culumn names
+```{r}
+traffic <- janitor::clean_names(traffic)
+names(traffic)
+```
+
+Let us fix relevant column data types: flt_date as date and year as integer
+```{r}
+traffic <- traffic |> 
+    mutate(
+        flt_date = as_date(flt_date, format = "%d/%m/%Y"), 
+        year = as.integer(year),
+        month_mon = factor(month_mon, levels = c("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"))
+    )
+```
+
+### Are there missing values?
+```{r}
+colSums(is.na(traffic))
+```
+Yes there are missing values. 
+
+Which columns have missing values
+```{r}
+names(traffic)[colSums(is.na(traffic)) > 0]
+```
+
+Let us preview records with missing values
+```{r}
+missing <- traffic |> 
+    filter(is.na(flt_dep_ifr_2), is.na(flt_arr_ifr_2), is.na(flt_tot_ifr_2))
+missing
+```
+
+All missing values are from airport operator.
+Missing values not entered by airport operator are already captured by network manager. we will use entries from network manager.
+Let us drop all entries from airport operator as most of them are missing.
+```{r}
+traffic <- traffic |> 
+    select(-c("flt_dep_ifr_2", "flt_arr_ifr_2", "flt_tot_ifr_2"))
+```
+
+### explore the individual variables.
+```{r}
+length(unique(traffic$apt_icao)) == length(unique(traffic$apt_name))
+```
+
+Turns out although we expect the number of unique entries in apt_icao and apt_name to be the same, they in fact are not the same.
+Further investigation revealed that apt_icao "LLBG" have two different apt_name
+```{r}
+distinct(traffic, apt_icao, apt_name) |> 
+    select(apt_icao) |> 
+    filter(
+        duplicated(distinct(traffic, apt_icao, apt_name) |> 
+                       select(apt_icao))
+    )
+```
+Note: only column apt_icao is a unique identifier
+
+## Descriptive statistics of numeric variables
+We print descriptive statistics for all numeric variables
+```{r}
+summary(traffic[sapply(traffic, is.numeric)])
+```
+
+## Summary of traffic by year
+```{r}
+traffic_by_year <- traffic |> 
+    filter(year %in% c(2016, 2017, 2018, 2019, 2020, 2021, 2022)) |> 
+    group_by(year) |> 
+    summarise(arrival = sum(flt_arr_1), departure = sum(flt_dep_1), total = sum(flt_tot_1)) |> 
+    mutate(
+        diff_arr_dep = arrival - departure,
+        era = c("pre_covid", "pre_covid", "pre_covid", "covid", "post_covid", "post_covid", "post_covid")
+    )
+
+traffic_by_year
+```
+
+## Data Visualization
+Lets visualize trend of total fights by year
+```{r fig.height=8, fig.width=12}
+p1 <- traffic_by_year |> 
+    ggplot(aes(x = year, y = total)) +
+    geom_rect(aes(xmin = 2019, xmax = 2020), ymin = -Inf, ymax = Inf, alpha = 0.01, fill = "red")+
+    geom_line(aes(group = 1), linewidth = 2) +
+    geom_point(shape = 21, size = 6, fill = "white") +
+    geom_vline(xintercept = c(2019, 2020), color = "grey") +
+    scale_y_continuous(
+        labels = scales::label_number(scale_cut = cut_short_scale()),
+        sec.axis = dup_axis()
+    ) +
+    labs(
+        title = "Air traffic by year: Impact of covid-19 travel restrictions on air traffic in Europe",
+        subtitle = "Following outbreak of covid-19 in December 2019, In March 2020, European states started enforcing travel restrictions to control the\nspread of covid-19 which impacted air traffic.",
+        x = "Year",
+        y = "Traffic (flights)",
+        caption = "Data source: https://ansperformance.eu/data/\nCreated with R ggplot2 graphic package\nStephen S."
+        
+    ) +
+    annotate(
+        geom = "curve", x = 2018, y = 14600000, xend = 2019, yend = 17100000,
+        curvature = 0.2, arrow = arrow(length = unit(4, "mm"))
+    ) +
+    annotate(geom = "text", 
+             x = 2018, y = 14000000, 
+             label = "Air traffic in Europe\nexperieced year-on-year growth\nfrom 2016 to 2019 before covid-19", 
+             hjust = "right"
+    )+
+    annotate(
+        geom = "curve", x = 2020.4, y = 11000000, xend = 2020, yend = 7500000,
+        curvature = -0.3, arrow = arrow(length = unit(4, "mm"))
+    ) +
+    annotate(geom = "text", 
+             x = 2020.1, y = 12000000, 
+             label = "Total air traffic in 2020\nis down by 56.8% compared to\n2019 due to travel restrictions", 
+             hjust = "left"
+    )+
+    annotate(geom = "text", 
+             x = 2019.15, y = 16500000, 
+             label = "Enforcement of\ntravel restrictions", 
+             hjust = "left"
+    )+
+    annotate(geom = "text", 
+             x = 2020.8, y = 16000000, 
+             label = "Two years after covid-19\nrestrictions began, air traffic\ncontinue to grow year-on-year\nbut is yet to return to\nlevels seen before covid-19", 
+             hjust = "left"
+    )+
+    ggthemes::theme_fivethirtyeight() +
+    theme(
+        axis.text.x = element_text(angle = -45, hjust = 0, vjust = 1),
+        axis.line.y = NULL,
+        axis.line.x = element_line(linewidth = 1),
+        axis.ticks = element_line(linewidth = 1)
+    )
+p1
+```
+
+Lets visualize trend of difference in arrival and departure traffic by year
+```{r fig.height=8, fig.width=12}
+p2 <- traffic_by_year |> 
+    ggplot() +
+    geom_rect(aes(xmin = 2019, xmax = 2020), ymin = -Inf, ymax = Inf, alpha = 0.01, fill = "red")+
+    geom_line(aes(x = year, y = diff_arr_dep, group = 1), linewidth = 2) +
+    geom_point(aes(x = year, y = diff_arr_dep, group = 1), shape = 21, size = 6, fill = "white") +
+    geom_vline(xintercept = c(2019, 2020), color = "grey") +
+    labs(
+        title = "Difference in arrival and departure traffic by year",
+        subtitle = "The difference in arrival traffic compared to departure traffic is higher after 2019 than any year before",
+        x = "Year",
+        y = "Difference in arrival and departure traffic (flights)",
+        caption = "Data source: https://ansperformance.eu/data/\nCreated with R ggplot2 graphic package\nStephen S.") +
+    ggthemes::theme_fivethirtyeight() +
+    theme(
+        axis.text.x = element_text(angle = -45, hjust = 0, vjust = 1),
+        axis.line.y = NULL,
+        axis.line.x = element_line(linewidth = 1),
+        axis.ticks = element_line(linewidth = 1)
+    )
+
+p2
+```
+
+
+Lets visualize seasonal trend of total traffic by months over the years
+
+```{r fig.height=6, fig.width=12}
+p3 <- traffic |> 
+  filter(year %in% c(2018, 2019, 2020, 2021, 2022)) |> 
+  group_by(year, month_mon) |> 
+  summarize(arrival = sum(flt_arr_1), departure = sum(flt_dep_1), total = sum(flt_tot_1)) |> 
+    ggplot(aes(x = month_mon, y = total, group = year)) +
+    geom_line(aes(color = factor(year)), size = 2) +
+    geom_point(aes(color = factor(year)), size = 4)+
+    scale_y_continuous(
+        labels = scales::label_number(scale_cut = cut_short_scale()),
+    ) +
+    labs(
+        title = "Total traffic by months over years",
+        x = "Months",
+        y = "Total traffic"
+    ) +
+    ggthemes::theme_solarized_2() +
+    theme(
+        axis.text.x = element_text(angle = -45, hjust = 0, vjust = 1),
+        axis.line.y = NULL,
+        axis.line.x = element_line(linewidth = 1),
+        axis.ticks = element_line(linewidth = 1)
+    )
+p3
+```
+
+Lets visualize relationship between arrival and departure over the years
+
+```{r fig.height=6, fig.width=12}
+p4 <- traffic_by_year |> 
+    ggplot(aes(x = arrival, y = departure)) +
+    geom_point(aes(color = factor(year)), size = 8) +
+    geom_line() +
+    scale_y_continuous(
+        labels = scales::label_number(scale_cut = cut_short_scale()),
+    ) +
+    scale_x_continuous(
+        labels = scales::label_number(scale_cut = cut_short_scale()),
+    ) +
+    labs(
+        title = "Arrival vs Departure",
+        x = "Arrival",
+        y = "Departure"
+    ) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p4
+```
+
+
+Which airports have top ten number of traffic in 2019
+```{r fig.height=6, fig.width=12}
+airport_top_2019 <- traffic |> 
+    filter(year == "2019") |> 
+    group_by(apt_name) |> 
+    summarize(total = sum(flt_tot_1)) |> 
+    arrange(desc(total)) |>
+    head(10)
+
+p5 <- airport_top_2019 |> 
+    ggplot() +
+    geom_col(aes(x = reorder(apt_name, -total), y = total), fill = "red") +
+    labs(
+        title = "Top ten Airports with highest number of total traffic in 2019",
+        y = "Total traffic",
+        x = "Airports"
+    ) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p5
+```
+
+Which airports have top ten number of traffic in 2020
+```{r fig.height=6, fig.width=12}
+airport_top_2020 <- traffic |> 
+    filter(year == "2020") |> 
+    group_by(apt_name) |> 
+    summarize(total = sum(flt_tot_1)) |> 
+    arrange(desc(total)) |>
+    head(10)
+
+p6 <- airport_top_2020 |> 
+    ggplot() +
+    geom_col(aes(x = reorder(apt_name, -total), y = total), fill = "green") +
+    labs(
+        title = "Top ten Airports with highest number of total traffic in 2020",
+        y = "Total traffic",
+        x = "Airports"
+    ) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p6
+```
+
+Combine plots from traffic data
+```{r fig.height=6, fig.width=10}
+((p5 / p6)) +
+    plot_annotation(title = 'Impact of COVID-19 on Air traffic')
+```
+
+## Conclussion
+Covid-19 and the associated measures taken by governments around the word to control its spread have led to a decrease in air traffic in European states. 
+In addition, the difference in the number of arrival and number of departure have increased in the years following covid-19 in comparison to the years before covid-19. 
+Finally, while all airports have been impacted, most of the top ten airports with the highest traffic before covid-19 continue to be among the top ten performers even after covid-19.
